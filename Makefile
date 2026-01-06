@@ -1,5 +1,5 @@
-NAME = panel-corners
-UUID = $(NAME)@aunetx
+NAME = custom-panel-corners
+UUID = $(NAME)@comprehensive-wall28
 
 
 .PHONY: build install pot test-shell test-prefs remove clean
@@ -27,18 +27,20 @@ pot:
 	find resources/ui -iname "*.ui" -printf "%p\n" | sort | \
 		xargs xgettext --output=po/$(UUID).pot --from-code=utf-8 --package-name=$(UUID)
 
-	rm po/LINGUAS
-	for l in $$(ls po/*.po); do \
+	rm -f po/LINGUAS
+	for l in $$(ls po/*.po 2>/dev/null); do \
 		basename $$l .po >> po/LINGUAS; \
 	done
 
 	cd po && \
-	for lang in $$(cat LINGUAS); do \
-    	mv $${lang}.po $${lang}.po.old; \
-    	msginit --no-translator --locale=$$lang --input $(UUID).pot -o $${lang}.po.new; \
-    	msgmerge -N $${lang}.po.old $${lang}.po.new > $${lang}.po; \
-    	rm $${lang}.po.old $${lang}.po.new; \
-	done
+	if [ -f LINGUAS ]; then \
+		for lang in $$(cat LINGUAS); do \
+			mv $${lang}.po $${lang}.po.old; \
+			msginit --no-translator --locale=$$lang --input $(UUID).pot -o $${lang}.po.new; \
+			msgmerge -N $${lang}.po.old $${lang}.po.new > $${lang}.po; \
+			rm $${lang}.po.old $${lang}.po.new; \
+		done; \
+	fi
 
 
 test-prefs: install

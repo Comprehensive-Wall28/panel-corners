@@ -6,6 +6,10 @@ import Cairo from 'cairo';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Utils from './utils.js';
+import { debounce } from './utils.js';
+
+// Debounce delay in milliseconds for settings changes
+const SETTINGS_DEBOUNCE_MS = 50;
 
 const CornersList = [
     Meta.DisplayCorner.TOPLEFT, Meta.DisplayCorner.TOPRIGHT,
@@ -16,10 +20,12 @@ const CornersList = [
 export class ScreenCorners {
     #settings;
     #connections;
+    #debouncedStyleUpdates;
 
     constructor(settings, connections) {
         this.#settings = settings;
         this.#connections = connections;
+        this.#debouncedStyleUpdates = [];
     }
 
     /**
@@ -47,6 +53,14 @@ export class ScreenCorners {
                 // store it in a buffer
                 layoutManager._screenCorners.push(actor);
 
+                // Create a debounced handler for this corner's settings changes
+                const debouncedUpdate = debounce(() => {
+                    actor.invalidateCache();
+                    actor.vfunc_style_changed();
+                }, SETTINGS_DEBOUNCE_MS);
+
+                this.#debouncedStyleUpdates.push(debouncedUpdate);
+
                 // connect to each preference change from the extension,
                 // allowing the corner to be updated when the user changes
                 // preferences
@@ -54,7 +68,7 @@ export class ScreenCorners {
                     this.#connections.connect(
                         this.#settings.settings,
                         'changed::' + key.name,
-                        actor.vfunc_style_changed.bind(actor)
+                        debouncedUpdate
                     );
                 });
             }
@@ -64,6 +78,10 @@ export class ScreenCorners {
 
     /** Removes existing corners. */
     remove() {
+        // Cancel any pending debounced updates
+        this.#debouncedStyleUpdates.forEach(debounced => debounced.cancel());
+        this.#debouncedStyleUpdates = [];
+
         // disconnect every signal created by the extension
         this.#connections.disconnect_all();
 
@@ -96,6 +114,11 @@ export class ScreenCorner extends St.DrawingArea {
     #settings;
     #monitor;
 
+    // Cached computed values
+    #cachedRadius = null;
+    #cachedBackgroundColor = null;
+    #cachedOpacity = null;
+
     constructor(corner, monitor, settings) {
         super({ style_class: 'screen-corner' });
 
@@ -106,8 +129,47 @@ export class ScreenCorner extends St.DrawingArea {
         this.#update_allocation();
     }
 
+    /**
+     * Invalidates all cached values, forcing recalculation on next access.
+     */
+    invalidateCache() {
+        this.#cachedRadius = null;
+        this.#cachedBackgroundColor = null;
+        this.#cachedOpacity = null;
+    }
+
+    /**
+     * Gets the corner radius, using cached value if available.
+     */
+    #getRadius() {
+        if (this.#cachedRadius === null) {
+            this.#cachedRadius = Utils.lookup_for_length(null, '-screen-corner-radius', this.#settings);
+        }
+        return this.#cachedRadius;
+    }
+
+    /**
+     * Gets the background color, using cached value if available.
+     */
+    #getBackgroundColor() {
+        if (this.#cachedBackgroundColor === null) {
+            this.#cachedBackgroundColor = Utils.lookup_for_color(null, '-screen-corner-background-color', this.#settings);
+        }
+        return this.#cachedBackgroundColor;
+    }
+
+    /**
+     * Gets the opacity, using cached value if available.
+     */
+    #getOpacity() {
+        if (this.#cachedOpacity === null) {
+            this.#cachedOpacity = Utils.lookup_for_double(null, '-screen-corner-opacity', this.#settings);
+        }
+        return this.#cachedOpacity;
+    }
+
     #update_allocation() {
-        let cornerRadius = Utils.lookup_for_length(null, '-screen-corner-radius', this.#settings);
+        let cornerRadius = this.#getRadius();
 
         switch (this.#corner) {
             case Meta.DisplayCorner.TOPLEFT:
@@ -141,8 +203,9 @@ export class ScreenCorner extends St.DrawingArea {
     }
 
     vfunc_repaint() {
-        let cornerRadius = Utils.lookup_for_length(null, '-screen-corner-radius', this.#settings);
-        let backgroundColor = Utils.lookup_for_color(null, '-screen-corner-background-color', this.#settings);
+        // Use cached values for better performance
+        let cornerRadius = this.#getRadius();
+        let backgroundColor = this.#getBackgroundColor();
 
         let cr = this.get_context();
         cr.setOperator(Cairo.Operator.SOURCE);
@@ -184,8 +247,12 @@ export class ScreenCorner extends St.DrawingArea {
     vfunc_style_changed() {
         super.vfunc_style_changed();
 
-        let cornerRadius = Utils.lookup_for_length(null, '-screen-corner-radius', this.#settings);
-        let opacity = Utils.lookup_for_double(null, '-screen-corner-opacity', this.#settings);
+        // Invalidate cache when style changes
+        this.invalidateCache();
+
+        // Use cached getters which will recalculate after invalidation
+        let cornerRadius = this.#getRadius();
+        let opacity = this.#getOpacity();
 
         this.set_opacity(opacity * 255);
         this.set_size(cornerRadius, cornerRadius);

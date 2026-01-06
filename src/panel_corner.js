@@ -5,17 +5,23 @@ import Cairo from 'cairo';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Utils from './utils.js';
+import { debounce } from './utils.js';
 import { ANIMATION_TIME } from 'resource:///org/gnome/shell/ui/overview.js';
+
+// Debounce delay in milliseconds for settings changes
+const SETTINGS_DEBOUNCE_MS = 50;
 
 const SYNC_CREATE = GObject.BindingFlags.SYNC_CREATE;
 
 export class PanelCorners {
     #settings;
     #connections;
+    #debouncedStyleUpdate;
 
     constructor(settings, connections) {
         this.#settings = settings;
         this.#connections = connections;
+        this.#debouncedStyleUpdate = null;
     }
 
     /**
@@ -60,13 +66,20 @@ export class PanelCorners {
 
         const actor = (this.#settings.settings);
 
+        // Create a debounced handler for settings changes
+        // This prevents multiple rapid updates when settings change
+        this.#debouncedStyleUpdate = debounce(() => {
+            corner.invalidateCache();
+            corner.vfunc_style_changed();
+        }, SETTINGS_DEBOUNCE_MS);
+
         // connect to each preference change from the extension, allowing the
         // corner to be updated when the user changes preferences
         this.#settings.keys.forEach(key => {
             this.#connections.connect(
                 actor,
                 'changed::' + key.name,
-                corner.vfunc_style_changed.bind(corner)
+                this.#debouncedStyleUpdate
             );
         });
     }
@@ -79,6 +92,12 @@ export class PanelCorners {
      * them on extension disable.
      */
     remove() {
+        // cancel any pending debounced updates
+        if (this.#debouncedStyleUpdate) {
+            this.#debouncedStyleUpdate.cancel();
+            this.#debouncedStyleUpdate = null;
+        }
+
         // disconnect every signal created by the extension
         this.#connections.disconnect_all();
 
@@ -125,17 +144,14 @@ export class PanelCorner extends St.DrawingArea {
 
     #side;
     #settings;
+    #position_changed_id;
+    #size_changed_id;
 
-    #position_changed_id = Main.panel.connect(
-        'notify::position',
-        this.#update_allocation.bind(this)
-    );
-
-    #size_changed_id = Main.panel.connect(
-        'notify::size',
-        this.#update_allocation.bind(this)
-    );
-
+    // Cached computed values
+    #cachedRadius = null;
+    #cachedBorderWidth = null;
+    #cachedBackgroundColor = null;
+    #cachedOpacity = null;
 
     constructor(side, settings) {
         super({ style_class: 'panel-corner' });
@@ -143,7 +159,68 @@ export class PanelCorner extends St.DrawingArea {
         this.#side = side;
         this.#settings = settings;
 
+        // Connect signals in constructor to ensure proper initialization order
+        this.#position_changed_id = Main.panel.connect(
+            'notify::position',
+            this.#update_allocation.bind(this)
+        );
+
+        this.#size_changed_id = Main.panel.connect(
+            'notify::size',
+            this.#update_allocation.bind(this)
+        );
+
         this.#update_allocation();
+    }
+
+    /**
+     * Invalidates all cached values, forcing recalculation on next access.
+     */
+    invalidateCache() {
+        this.#cachedRadius = null;
+        this.#cachedBorderWidth = null;
+        this.#cachedBackgroundColor = null;
+        this.#cachedOpacity = null;
+    }
+
+    /**
+     * Gets the corner radius, using cached value if available.
+     */
+    #getRadius(node) {
+        if (this.#cachedRadius === null) {
+            this.#cachedRadius = Utils.lookup_for_length(node, '-panel-corner-radius', this.#settings);
+        }
+        return this.#cachedRadius;
+    }
+
+    /**
+     * Gets the border width, using cached value if available.
+     */
+    #getBorderWidth(node) {
+        if (this.#cachedBorderWidth === null) {
+            this.#cachedBorderWidth = Utils.lookup_for_length(node, '-panel-corner-border-width', this.#settings);
+        }
+        return this.#cachedBorderWidth;
+    }
+
+    /**
+     * Gets the background color, using cached value if available.
+     */
+    #getBackgroundColor(node) {
+        if (this.#cachedBackgroundColor === null) {
+            this.#cachedBackgroundColor = Utils.lookup_for_color(node, '-panel-corner-background-color', this.#settings);
+        }
+        return this.#cachedBackgroundColor;
+    }
+
+    /**
+     * Gets the opacity, using cached value if available.
+     */
+    #getOpacity(node) {
+        if (this.#cachedOpacity === null) {
+            this.#cachedOpacity = Utils.lookup_for_double(node, '-panel-corner-opacity', this.#settings);
+        }
+        return this.#cachedOpacity;
     }
 
     remove_connections() {
@@ -189,10 +266,10 @@ export class PanelCorner extends St.DrawingArea {
     vfunc_repaint() {
         let node = this.get_theme_node();
 
-        let cornerRadius = Utils.lookup_for_length(node, '-panel-corner-radius', this.#settings);
-        let borderWidth = Utils.lookup_for_length(node, '-panel-corner-border-width', this.#settings);
-
-        let backgroundColor = Utils.lookup_for_color(node, '-panel-corner-background-color', this.#settings);
+        // Use cached values for better performance
+        let cornerRadius = this.#getRadius(node);
+        let borderWidth = this.#getBorderWidth(node);
+        let backgroundColor = this.#getBackgroundColor(node);
 
         let cr = this.get_context();
         cr.setOperator(Cairo.Operator.SOURCE);
@@ -218,12 +295,16 @@ export class PanelCorner extends St.DrawingArea {
 
     vfunc_style_changed() {
         super.vfunc_style_changed();
+
+        // Invalidate cache when style changes (theme changes, not settings)
+        this.invalidateCache();
+
         let node = this.get_theme_node();
 
-        let cornerRadius = Utils.lookup_for_length(node, '-panel-corner-radius', this.#settings);
-        let borderWidth = Utils.lookup_for_length(node, '-panel-corner-border-width', this.#settings);
-
-        let opacity = Utils.lookup_for_double(node, '-panel-corner-opacity', this.#settings);
+        // Use cached getters which will recalculate after invalidation
+        let cornerRadius = this.#getRadius(node);
+        let borderWidth = this.#getBorderWidth(node);
+        let opacity = this.#getOpacity(node);
 
         // if using extension values and in overview, set transparent
         if (

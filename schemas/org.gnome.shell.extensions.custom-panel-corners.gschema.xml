@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-    <schema id="org.gnome.shell.extensions.panel-corners" path="/org/gnome/shell/extensions/panel-corners/">
+    <schema id="org.gnome.shell.extensions.custom-panel-corners" path="/org/gnome/shell/extensions/custom-panel-corners/">
 
         <!-- PANEL CORNERS -->
         <key type="b" name="panel-corners">

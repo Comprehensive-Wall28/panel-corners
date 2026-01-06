@@ -1,6 +1,40 @@
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import Cogl from 'gi://Cogl';
+import GLib from 'gi://GLib';
+
+/**
+ * Creates a debounced version of a function that delays invoking the callback
+ * until after `wait` milliseconds have elapsed since the last call.
+ *
+ * @param {Function} callback - The function to debounce
+ * @param {number} wait - The number of milliseconds to delay
+ * @returns {Function} The debounced function with a `cancel` method
+ */
+export function debounce(callback, wait) {
+    let timeoutId = null;
+
+    const debounced = function (...args) {
+        if (timeoutId !== null) {
+            GLib.source_remove(timeoutId);
+        }
+
+        timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, wait, () => {
+            timeoutId = null;
+            callback.apply(this, args);
+            return GLib.SOURCE_REMOVE;
+        });
+    };
+
+    debounced.cancel = function () {
+        if (timeoutId !== null) {
+            GLib.source_remove(timeoutId);
+            timeoutId = null;
+        }
+    };
+
+    return debounced;
+}
 
 export function lookup_for_length(node, prop, settings) {
     const use_extension_values = node && settings.FORCE_EXTENSION_VALUES.get();
